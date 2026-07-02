@@ -1,5 +1,5 @@
 {
-    "version": "07.02.26.01",
+    "version": "07.02.26.02",
     "versionCode": 2,
     "apk": "https://yourdomain.com/update/app-release.apk",
     "force": false,
