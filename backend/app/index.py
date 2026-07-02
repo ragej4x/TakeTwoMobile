@@ -7,8 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .ai import router as ai_router
 from .config import settings
 from .database import Base, engine, get_db
+from .deps import get_current_user
 from .models import (
     AccountRecord,
     JobRecord,
@@ -34,8 +36,6 @@ from .schemas import (
     PasswordResetVerifyResponse,
     ProfileData,
     SettingsData,
-    TestAccountCreateRequest,
-    TestAccountCreateResponse,
 )
 
 ALL_BINS = ["A-01", "A-02", "A-03", "B-01", "B-02", "B-03", "B-04", "C-01", "C-02"]
@@ -52,6 +52,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(ai_router, prefix=settings.api_prefix)
 
 
 def hash_password(password: str) -> str:
@@ -104,42 +106,6 @@ def to_profile(account: AccountRecord) -> ProfileData:
         branch=account.branch,
         photoUrl=account.photo_url, 
     )
-
-
-def get_current_user(
-    authorization: str | None = Header(default=None),
-    session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
-    db: Session = Depends(get_db),
-) -> AccountRecord:
-    # Prefer a Bearer token from the Authorization header. This is what the
-    # mobile/web client actually uses now, since it works regardless of
-    # cookie/SameSite quirks (WebViews, cross-host dev setups, etc).
-    # The session cookie is kept as a fallback for convenience (e.g. Swagger UI).
-    token = None
-    if authorization and authorization.lower().startswith("bearer "):
-        token = authorization[7:].strip()
-    if not token:
-        token = session_token
-
-    if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-
-    session = db.scalar(select(SessionRecord).where(SessionRecord.token == token))
-    if session is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
-
-    if session.expires_at <= datetime.utcnow():
-        db.delete(session)
-        db.commit()
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
-
-    user = db.get(AccountRecord, session.user_id)
-    if user is None:
-        db.delete(session)
-        db.commit()
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session invalid")
-
-    return user
 
 
 def to_job_out(job: JobRecord) -> JobOut:
@@ -221,19 +187,7 @@ def on_startup() -> None:
                 )
             )
 
-        existing_admin = db.scalar(select(AccountRecord).where(AccountRecord.email == "admin@taketwo.ph"))
-        if existing_admin is None:
-            db.add(
-                AccountRecord(
-                    email="admin@taketwo.ph",
-                    password_hash=hash_password("admin123"),
-                    name="TakeTwo Admin",
-                    phone="09991234567",
-                    role="Admin",
-                    branch="Main Branch",
-                    is_test_account=True,
-                )
-            )
+
 
         db.commit()
 
@@ -364,26 +318,6 @@ def confirm_password_reset(payload: PasswordResetConfirmRequest, db: Session = D
     return PasswordResetConfirmResponse(message="Password reset successful")
 
 
-@app.post(f"{settings.api_prefix}/auth/test-account", response_model=TestAccountCreateResponse, status_code=status.HTTP_201_CREATED)
-def create_test_account(payload: TestAccountCreateRequest, db: Session = Depends(get_db)) -> TestAccountCreateResponse:
-    email = payload.email.lower()
-    existing = db.scalar(select(AccountRecord).where(AccountRecord.email == email))
-    if existing is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email is already registered")
-
-    account = AccountRecord(
-        email=email,
-        password_hash=hash_password(payload.password),
-        name=payload.name,
-        phone=payload.phone,
-        role=payload.role,
-        branch=payload.branch,
-        is_test_account=True,
-    )
-    db.add(account)
-    db.commit()
-    db.refresh(account)
-    return TestAccountCreateResponse(id=account.id, email=account.email, name=account.name)
 
 
 @app.get(f"{settings.api_prefix}/profile", response_model=ProfileData)
@@ -591,7 +525,3 @@ def get_bins(
         )
 
     return summaries
-
-
-
-
