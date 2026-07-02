@@ -1,7 +1,7 @@
 {
     "version": "07.02.26.02",
     "versionCode": 2,
-    "apk": "https://release-assets.githubusercontent.com/github-production-release-asset/1286468478/77c7bb94-a1e3-4915-9045-59fbaa46edd9?sp=r&sv=2018-11-09&sr=b&spr=https&se=2026-07-02T20%3A39%3A25Z&rscd=attachment%3B+filename%3Dapp-debug.apk&rsct=application%2Fvnd.android.package-archive&skoid=96c2d410-5711-43a1-aedd-ab1947aa7ab0&sktid=398a6654-997b-47e9-b12b-9515b896b4de&skt=2026-07-02T19%3A38%3A30Z&ske=2026-07-02T20%3A39%3A25Z&sks=b&skv=2018-11-09&sig=acoKzy52CV3sUegfVVIStyJ8wmlvzehBk2lUk237wDc%3D&jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmVsZWFzZS1hc3NldHMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIiwia2V5Ijoia2V5MSIsImV4cCI6MTc4MzAyMjM3NCwibmJmIjoxNzgzMDIyMDc0LCJwYXRoIjoicmVsZWFzZWFzc2V0cHJvZHVjdGlvbi5ibG9iLmNvcmUud2luZG93cy5uZXQifQ.Bwb1eXo96wNXu7taVkWBSTMUxLT_Nc1Ffbr7x6LFJQY&response-content-disposition=attachment%3B%20filename%3Dapp-debug.apk&response-content-type=application%2Fvnd.android.package-archive",
+    "apk": "https://github.com/ragej4x/TakeTwoMobile/releases/download/release/app-debug.apk",
     "force": false,
     "message": "New improvements available."
 }
