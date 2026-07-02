@@ -1,0 +1,106 @@
+from datetime import datetime
+
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String
+from sqlalchemy.orm import Mapped, mapped_column
+
+from .database import Base
+
+
+class JobRecord(Base):
+    __tablename__ = "jobs"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True, index=True)
+    customer: Mapped[str] = mapped_column(String(200), nullable=False)
+    phone: Mapped[str] = mapped_column(String(40), default="")
+    email: Mapped[str] = mapped_column(String(255), default="")
+    date_received: Mapped[str] = mapped_column(String(20), nullable=False)
+    expected_release: Mapped[str] = mapped_column(String(20), default="")
+    shoes: Mapped[list] = mapped_column(JSON, default=list)
+    bin: Mapped[str] = mapped_column(String(20), default="")
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    receive_updates: Mapped[bool] = mapped_column(Boolean, default=False)
+    total_payment: Mapped[float] = mapped_column(Float, default=0.0)
+    notes: Mapped[str] = mapped_column(String(2000), default="")
+    assigned_to: Mapped[str] = mapped_column(String(200), default="")
+    branch: Mapped[str] = mapped_column(String(120), default="")
+    released: Mapped[bool] = mapped_column(Boolean, default=False)
+    signature_data_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+class ProfileRecord(Base):
+    __tablename__ = "profile"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    name: Mapped[str] = mapped_column(String(200))
+    phone: Mapped[str] = mapped_column(String(40))
+    email: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(100))
+    branch: Mapped[str] = mapped_column(String(120))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+class SettingsRecord(Base):
+    __tablename__ = "app_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    conn_status: Mapped[str] = mapped_column(String(40), default="connected")
+    theme: Mapped[str] = mapped_column(String(40), default="light")
+    branch: Mapped[str] = mapped_column(String(120), default="Main Branch")
+    selected_printer: Mapped[str] = mapped_column(String(120), default="Brother QL-820NWB")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+class AccountRecord(Base):
+    __tablename__ = "accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    phone: Mapped[str] = mapped_column(String(40), default="")
+    role: Mapped[str] = mapped_column(String(100), default="Staff")
+    branch: Mapped[str] = mapped_column(String(120), default="Main Branch")
+    photo_url: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    is_test_account: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+class SessionRecord(Base):
+    __tablename__ = "sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    token: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class PasswordResetCodeRecord(Base):
+    __tablename__ = "password_reset_codes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(6), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
