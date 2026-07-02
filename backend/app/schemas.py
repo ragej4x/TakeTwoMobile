@@ -111,19 +111,6 @@ class PasswordResetConfirmResponse(BaseModel):
     message: str
 
 
-class TestAccountCreateRequest(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=4)
-    name: str = "Test User"
-    phone: str = "09990000000"
-    role: str = "Staff"
-    branch: str = "Main Branch"
-
-
-class TestAccountCreateResponse(BaseModel):
-    id: int
-    email: EmailStr
-    name: str
 
 
 class ProfileData(BaseModel):
