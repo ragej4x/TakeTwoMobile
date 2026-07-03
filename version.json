@@ -3,5 +3,5 @@
     "versionCode": 2,
     "apk": "https://github.com/ragej4x/TakeTwoMobile/releases/download/release/app-debug.apk",
     "force": false,
-    "message": "New improvements available."
+    "message": "• AI Auto Detection added.\n• Camera support added.\n• Image upload implemented.\n• Performance improvements and bug fixes."
 }
