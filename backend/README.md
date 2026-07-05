@@ -46,7 +46,7 @@ copy .env.example .env
 4. Start the API.
 
 ```powershell
-uvicorn app.main:app --reload --port 8000
+ uvicorn app.index:app --reload --port 8000
 ```
 
 Open http://127.0.0.1:8000/docs for Swagger UI.

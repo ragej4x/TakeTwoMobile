@@ -49,9 +49,13 @@ class JobBase(BaseModel):
     totalPayment: float = 0.0
     notes: str = ""
     assignedTo: str = ""
-    branch: str = "Main Branch"
+    branch: str = ""
     released: bool = False
     signatureDataUrl: str | None = None
+    discountCode: str | None = None
+    discountName: str | None = None
+    discountPercent: float | None = None
+    discountAmount: float | None = None
 
 
 class JobCreate(JobBase):
@@ -111,15 +115,13 @@ class PasswordResetConfirmResponse(BaseModel):
     message: str
 
 
-
-
 class ProfileData(BaseModel):
     name: str
     phone: str
     email: str
     role: str
     branch: str
-    photoUrl: str | None = None   
+    photoUrl: str | None = None
 
 
 class SettingsData(BaseModel):
@@ -140,3 +142,35 @@ class BinSummary(BaseModel):
     orderCount: int
     pairCount: int
     jobs: list[str]
+
+
+class DiscountOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    code: str
+    percent: float
+    maxUses: int | None
+    timesUsed: int
+    expiresAt: datetime | None
+    active: bool
+
+
+class DiscountCreate(BaseModel):
+    name: str
+    code: str = Field(min_length=1, max_length=40)
+    percent: float = Field(gt=0, le=100)
+    expiresAt: datetime | None = None
+    maxUses: int | None = None
+
+
+class DiscountValidateRequest(BaseModel):
+    code: str
+
+
+class DiscountValidateResponse(BaseModel):
+    valid: bool
+    name: str | None = None
+    percent: float | None = None
+    message: str | None = None
