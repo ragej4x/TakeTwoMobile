@@ -13,6 +13,7 @@ from .database import Base, engine, get_db
 from .deps import get_current_user
 from .models import (
     AccountRecord,
+    DiscountRecord,
     JobRecord,
     PasswordResetCodeRecord,
     ProfileRecord,
@@ -22,6 +23,10 @@ from .models import (
 from .schemas import (
     AuthResponse,
     BinSummary,
+    DiscountCreate,
+    DiscountOut,
+    DiscountValidateRequest,
+    DiscountValidateResponse,
     JobCreate,
     JobOut,
     JobStatusUpdate,
@@ -108,6 +113,19 @@ def to_profile(account: AccountRecord) -> ProfileData:
     )
 
 
+def to_discount_out(discount: DiscountRecord) -> DiscountOut:
+    return DiscountOut(
+        id=discount.id,
+        name=discount.name,
+        code=discount.code,
+        percent=discount.percent,
+        maxUses=discount.max_uses,
+        timesUsed=discount.times_used,
+        expiresAt=discount.expires_at,
+        active=discount.active,
+    )
+
+
 def to_job_out(job: JobRecord) -> JobOut:
     return JobOut(
         id=job.id,
@@ -126,6 +144,10 @@ def to_job_out(job: JobRecord) -> JobOut:
         branch=job.branch,
         released=job.released,
         signatureDataUrl=job.signature_data_url,
+        discountCode=job.discount_code,
+        discountName=job.discount_name,
+        discountPercent=job.discount_percent,
+        discountAmount=job.discount_amount,
         createdAt=job.created_at,
         updatedAt=job.updated_at,
     )
@@ -147,6 +169,30 @@ def apply_job_update(record: JobRecord, payload: JobUpdate | JobCreate) -> None:
     record.branch = payload.branch
     record.released = payload.released
     record.signature_data_url = payload.signatureDataUrl
+    record.discount_code = payload.discountCode
+    record.discount_name = payload.discountName
+    record.discount_percent = payload.discountPercent
+    record.discount_amount = payload.discountAmount
+
+
+def consume_discount_code(db: Session, code: str | None) -> None:
+    """Re-validates a discount code server-side and counts one use against
+    it. Called when a job order that references the code is created, so a
+    code that expired or hit its limit between the customer-facing check and
+    submission doesn't silently slip through."""
+    if not code:
+        return
+    normalized = code.strip().upper()
+    discount = db.scalar(select(DiscountRecord).where(DiscountRecord.code == normalized))
+    if discount is None:
+        raise HTTPException(status_code=400, detail=f"Discount code {normalized} not found")
+    if not discount.active:
+        raise HTTPException(status_code=400, detail="Discount code is no longer active")
+    if discount.expires_at and discount.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Discount code has expired")
+    if discount.max_uses is not None and discount.times_used >= discount.max_uses:
+        raise HTTPException(status_code=400, detail="Discount code has reached its usage limit")
+    discount.times_used += 1
 
 
 def generate_job_id(db: Session) -> str:
@@ -157,39 +203,6 @@ def generate_job_id(db: Session) -> str:
     sequence = len(today_ids) + 1
     return f"{prefix}{sequence:03d}"
 
-
-@app.on_event("startup")
-def on_startup() -> None:
-    Base.metadata.create_all(bind=engine)
-    with Session(engine) as db:
-        profile = db.get(ProfileRecord, 1)
-        if profile is None:
-            db.add(
-                ProfileRecord(
-                    id=1,
-                    name="Juan Dela Cruz",
-                    phone="09991234567",
-                    email="juan@taketwo.ph",
-                    role="Admin",
-                    branch="Main Branch",
-                )
-            )
-
-        app_settings = db.get(SettingsRecord, 1)
-        if app_settings is None:
-            db.add(
-                SettingsRecord(
-                    id=1,
-                    conn_status="connected",
-                    theme="light",
-                    branch="Main Branch",
-                    selected_printer="Brother QL-820NWB",
-                )
-            )
-
-
-
-        db.commit()
 
 
 @app.get(f"{settings.api_prefix}/health")
@@ -420,6 +433,7 @@ def create_job(
 
     record = JobRecord(id=job_id, customer=payload.customer, date_received=payload.dateReceived, status=payload.status)
     apply_job_update(record, payload)
+    consume_discount_code(db, payload.discountCode)
     db.add(record)
     db.commit()
     db.refresh(record)
@@ -495,6 +509,76 @@ def delete_job(
     record = db.get(JobRecord, job_id)
     if not record:
         raise HTTPException(status_code=404, detail="Job not found")
+    db.delete(record)
+    db.commit()
+
+
+@app.post(f"{settings.api_prefix}/discounts/validate", response_model=DiscountValidateResponse)
+def validate_discount(
+    payload: DiscountValidateRequest,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> DiscountValidateResponse:
+    """Read-only check — does NOT consume a use. Safe to call as the
+    customer/staff types the code in during order creation."""
+    code = payload.code.strip().upper()
+    if not code:
+        return DiscountValidateResponse(valid=False, message="Enter a discount code")
+
+    discount = db.scalar(select(DiscountRecord).where(DiscountRecord.code == code))
+    if discount is None:
+        return DiscountValidateResponse(valid=False, message="Discount code not found")
+    if not discount.active:
+        return DiscountValidateResponse(valid=False, message="Discount code is no longer active")
+    if discount.expires_at and discount.expires_at < datetime.utcnow():
+        return DiscountValidateResponse(valid=False, message="Discount code has expired")
+    if discount.max_uses is not None and discount.times_used >= discount.max_uses:
+        return DiscountValidateResponse(valid=False, message="Discount code has reached its usage limit")
+
+    return DiscountValidateResponse(valid=True, name=discount.name, percent=discount.percent)
+
+
+@app.get(f"{settings.api_prefix}/discounts", response_model=list[DiscountOut])
+def list_discounts(
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> list[DiscountOut]:
+    discounts = db.scalars(select(DiscountRecord).order_by(DiscountRecord.created_at.desc())).all()
+    return [to_discount_out(d) for d in discounts]
+
+
+@app.post(f"{settings.api_prefix}/discounts", response_model=DiscountOut, status_code=status.HTTP_201_CREATED)
+def create_discount(
+    payload: DiscountCreate,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> DiscountOut:
+    code = payload.code.strip().upper()
+    if db.scalar(select(DiscountRecord).where(DiscountRecord.code == code)):
+        raise HTTPException(status_code=409, detail=f"Discount code {code} already exists")
+
+    record = DiscountRecord(
+        name=payload.name,
+        code=code,
+        percent=payload.percent,
+        max_uses=payload.maxUses,
+        expires_at=payload.expiresAt,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return to_discount_out(record)
+
+
+@app.delete(f"{settings.api_prefix}/discounts/{{discount_id}}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_discount(
+    discount_id: int,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> None:
+    record = db.get(DiscountRecord, discount_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Discount not found")
     db.delete(record)
     db.commit()
 

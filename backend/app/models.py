@@ -25,6 +25,10 @@ class JobRecord(Base):
     branch: Mapped[str] = mapped_column(String(120), default="")
     released: Mapped[bool] = mapped_column(Boolean, default=False)
     signature_data_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    discount_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    discount_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    discount_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    discount_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -76,7 +80,6 @@ class AccountRecord(Base):
     branch: Mapped[str] = mapped_column(String(120), default="Main Branch")
     photo_url: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    is_test_account: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -93,6 +96,25 @@ class SessionRecord(Base):
     user_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class DiscountRecord(Base):
+    __tablename__ = "discounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    code: Mapped[str] = mapped_column(String(40), unique=True, index=True, nullable=False)
+    percent: Mapped[float] = mapped_column(Float, nullable=False)  # e.g. 20 for 20% off
+    max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = unlimited
+    times_used: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # None = never expires
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
 
 
 class PasswordResetCodeRecord(Base):
