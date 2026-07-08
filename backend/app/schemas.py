@@ -34,6 +34,7 @@ class ShoeItem(BaseModel):
     otherDamage: str = ""
     totalItemPayment: float = 0.0
     photos: dict[str, str] = Field(default_factory=dict)
+    afterPhotos: dict[str, str] = Field(default_factory=dict)
 
 
 class JobBase(BaseModel):
