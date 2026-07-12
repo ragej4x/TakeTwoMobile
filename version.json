@@ -3,5 +3,5 @@
   "versionCode": 2,
   "apk": "https://github.com/ragej4x/TakeTwoMobile/releases/download/release/app-debug.apk",
   "force": false,
-  "message": "Fixed AI token limit.\n• Added Upload After Shoe photo.\n• Performance improvements and bug fixes."
+  "message": "Fixed AI token limit.\n•Added Upload After Shoe photo.\n•Performance improvements and bug fixes.\n•Wired to Admin panel"
 }
