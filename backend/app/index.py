@@ -5,6 +5,7 @@ import secrets
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .ai import router as ai_router
@@ -13,20 +14,33 @@ from .database import Base, engine, get_db
 from .deps import get_current_user
 from .models import (
     AccountRecord,
+    BinRecord,
+    BranchRecord,
     DiscountRecord,
     JobRecord,
     PasswordResetCodeRecord,
     ProfileRecord,
     SessionRecord,
     SettingsRecord,
+    PricingRecord
 )
 from .schemas import (
     AuthResponse,
+    BinCreate,
+    BinOut,
     BinSummary,
+    BinUpdate,
+    BranchCreate,
+    BranchOut,
+    BranchUpdate,
     DiscountCreate,
     DiscountOut,
+    DiscountUpdate,
     DiscountValidateRequest,
     DiscountValidateResponse,
+    EmployeeCreate,
+    EmployeeOut,
+    EmployeeUpdate,
     JobCreate,
     JobOut,
     JobStatusUpdate,
@@ -41,7 +55,13 @@ from .schemas import (
     PasswordResetVerifyResponse,
     ProfileData,
     SettingsData,
+    PricingCreate,  
+    PricingOut,
+    PricingUpdate,
 )
+
+
+
 
 ALL_BINS = ["A-01", "A-02", "A-03", "B-01", "B-02", "B-03", "B-04", "C-01", "C-02"]
 SESSION_COOKIE_NAME = "taketwo_session"
@@ -110,6 +130,63 @@ def to_profile(account: AccountRecord) -> ProfileData:
         role=account.role,
         branch=account.branch,
         photoUrl=account.photo_url, 
+    )
+
+
+def employee_job_stats(db: Session, name: str) -> tuple[int, float]:
+    released_jobs = db.scalars(
+        select(JobRecord).where(JobRecord.assigned_to == name, JobRecord.released.is_(True))
+    ).all()
+    return len(released_jobs), sum(job.total_payment for job in released_jobs)
+
+
+def to_employee_out(account: AccountRecord, db: Session) -> EmployeeOut:
+    jobs_completed, revenue = employee_job_stats(db, account.name)
+    return EmployeeOut(
+        id=account.id,
+        name=account.name,
+        email=account.email,
+        phone=account.phone,
+        role=account.role,
+        branch=account.branch,
+        photoUrl=account.photo_url,
+        joinDate=account.created_at,
+        jobsCompleted=jobs_completed,
+        revenue=revenue,
+        status="Active",
+    )
+
+
+def to_branch_out(branch: BranchRecord) -> BranchOut:
+    return BranchOut(
+        id=branch.id,
+        name=branch.name,
+        code=branch.code,
+        address=branch.address,
+        manager=branch.manager,
+        active=branch.active,
+        createdAt=branch.created_at,
+        updatedAt=branch.updated_at,
+    )
+
+
+def to_bin_out(bin_record: BinRecord, db: Session) -> BinOut:
+    active_jobs = db.scalars(
+        select(JobRecord).where(JobRecord.bin == bin_record.name, JobRecord.released.is_(False))
+    ).all()
+    occupied_count = sum(len(job.shoes or []) for job in active_jobs)
+    available_count = max(bin_record.capacity - occupied_count - bin_record.reserved, 0)
+    return BinOut(
+        id=bin_record.id,
+        name=bin_record.name,
+        branch=bin_record.branch,
+        capacity=bin_record.capacity,
+        reserved=bin_record.reserved,
+        active=bin_record.active,
+        occupiedCount=occupied_count,
+        availableCount=available_count,
+        createdAt=bin_record.created_at,
+        updatedAt=bin_record.updated_at,
     )
 
 
@@ -355,6 +432,174 @@ def update_profile(
     return to_profile(current_user)
 
 
+@app.get(f"{settings.api_prefix}/employees", response_model=list[EmployeeOut])
+def list_employees(
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> list[EmployeeOut]:
+    accounts = db.scalars(select(AccountRecord).order_by(AccountRecord.created_at.desc())).all()
+    return [to_employee_out(account, db) for account in accounts]
+
+
+@app.post(f"{settings.api_prefix}/employees", response_model=EmployeeOut, status_code=status.HTTP_201_CREATED)
+def create_employee(
+    payload: EmployeeCreate,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> EmployeeOut:
+    email = payload.email.lower()
+    if db.scalar(select(AccountRecord).where(AccountRecord.email == email)):
+        raise HTTPException(status_code=409, detail=f"Account with email {email} already exists")
+
+    try:
+        record = AccountRecord(
+            email=email,
+            password_hash=hash_password(payload.password),
+            name=payload.name,
+            phone=payload.phone,
+            role=payload.role,
+            branch=payload.branch,
+        )
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Unable to create employee. The provided details may already exist.") from exc
+
+    return to_employee_out(record, db)
+
+
+@app.put(f"{settings.api_prefix}/employees/{{employee_id}}", response_model=EmployeeOut)
+def update_employee(
+    employee_id: int,
+    payload: EmployeeUpdate,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> EmployeeOut:
+    record = db.get(AccountRecord, employee_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    if payload.name is not None:
+        record.name = payload.name
+    if payload.phone is not None:
+        record.phone = payload.phone
+    if payload.role is not None:
+        record.role = payload.role
+    if payload.branch is not None:
+        record.branch = payload.branch
+    if payload.password:
+        record.password_hash = hash_password(payload.password)
+
+    db.commit()
+    db.refresh(record)
+    return to_employee_out(record, db)
+
+
+@app.delete(f"{settings.api_prefix}/employees/{{employee_id}}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_employee(
+    employee_id: int,
+    db: Session = Depends(get_db),
+    current_user: AccountRecord = Depends(get_current_user),
+) -> None:
+    if current_user.id == employee_id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+
+    record = db.get(AccountRecord, employee_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    sessions = db.scalars(select(SessionRecord).where(SessionRecord.user_id == employee_id)).all()
+    for session in sessions:
+        db.delete(session)
+
+    db.delete(record)
+    db.commit()
+
+
+@app.get(f"{settings.api_prefix}/branches", response_model=list[BranchOut])
+def list_branches(
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> list[BranchOut]:
+    branches = db.scalars(select(BranchRecord).order_by(BranchRecord.created_at.desc())).all()
+    return [to_branch_out(branch) for branch in branches]
+
+
+@app.post(f"{settings.api_prefix}/branches", response_model=BranchOut, status_code=status.HTTP_201_CREATED)
+def create_branch(
+    payload: BranchCreate,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> BranchOut:
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Branch name is required")
+
+    code = payload.code.strip().upper()
+    if code and db.scalar(select(BranchRecord).where(BranchRecord.code == code)):
+        raise HTTPException(status_code=409, detail=f"Branch code {code} already exists")
+    if db.scalar(select(BranchRecord).where(BranchRecord.name == name)):
+        raise HTTPException(status_code=409, detail=f"Branch {name} already exists")
+
+    record = BranchRecord(name=name, code=code, address=payload.address or "", manager=payload.manager or "", active=payload.active)
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return to_branch_out(record)
+
+
+@app.put(f"{settings.api_prefix}/branches/{{branch_id}}", response_model=BranchOut)
+def update_branch(
+    branch_id: int,
+    payload: BranchUpdate,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> BranchOut:
+    record = db.get(BranchRecord, branch_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Branch name is required")
+        if name != record.name and db.scalar(select(BranchRecord).where(BranchRecord.name == name)):
+            raise HTTPException(status_code=409, detail=f"Branch {name} already exists")
+        record.name = name
+
+    if payload.code is not None:
+        code = payload.code.strip().upper()
+        if code and code != record.code and db.scalar(select(BranchRecord).where(BranchRecord.code == code)):
+            raise HTTPException(status_code=409, detail=f"Branch code {code} already exists")
+        record.code = code
+
+    if payload.address is not None:
+        record.address = payload.address or ""
+    if payload.manager is not None:
+        record.manager = payload.manager or ""
+    if payload.active is not None:
+        record.active = payload.active
+
+    db.commit()
+    db.refresh(record)
+    return to_branch_out(record)
+
+
+@app.delete(f"{settings.api_prefix}/branches/{{branch_id}}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_branch(
+    branch_id: int,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> None:
+    record = db.get(BranchRecord, branch_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    db.delete(record)
+    db.commit()
+
+
 @app.get(f"{settings.api_prefix}/settings", response_model=SettingsData)
 def get_settings(
     db: Session = Depends(get_db),
@@ -570,6 +815,41 @@ def create_discount(
     return to_discount_out(record)
 
 
+@app.patch(f"{settings.api_prefix}/discounts/{{discount_id}}", response_model=DiscountOut)
+def update_discount(
+    discount_id: int,
+    payload: DiscountUpdate,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> DiscountOut:
+    record = db.get(DiscountRecord, discount_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Discount not found")
+
+    data = payload.model_dump(exclude_unset=True)
+
+    if "code" in data and data["code"] is not None:
+        code = data["code"].strip().upper()
+        if code != record.code and db.scalar(select(DiscountRecord).where(DiscountRecord.code == code)):
+            raise HTTPException(status_code=409, detail=f"Discount code {code} already exists")
+        record.code = code
+
+    if "name" in data:
+        record.name = data["name"]
+    if "percent" in data:
+        record.percent = data["percent"]
+    if "expiresAt" in data:
+        record.expires_at = data["expiresAt"]
+    if "maxUses" in data:
+        record.max_uses = data["maxUses"]
+    if "active" in data:
+        record.active = data["active"]
+
+    db.commit()
+    db.refresh(record)
+    return to_discount_out(record)
+
+
 @app.delete(f"{settings.api_prefix}/discounts/{{discount_id}}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_discount(
     discount_id: int,
@@ -583,20 +863,104 @@ def delete_discount(
     db.commit()
 
 
-@app.get(f"{settings.api_prefix}/bins", response_model=list[BinSummary])
-def get_bins(
+@app.get(f"{settings.api_prefix}/bins", response_model=list[BinOut])
+def list_bins(
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> list[BinOut]:
+    bins = db.scalars(select(BinRecord).order_by(BinRecord.created_at.desc())).all()
+    return [to_bin_out(bin_record, db) for bin_record in bins]
+
+
+@app.post(f"{settings.api_prefix}/bins", response_model=BinOut, status_code=status.HTTP_201_CREATED)
+def create_bin(
+    payload: BinCreate,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> BinOut:
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Bin name is required")
+
+    if db.scalar(select(BinRecord).where(BinRecord.name == name)):
+        raise HTTPException(status_code=409, detail=f"Bin {name} already exists")
+
+    record = BinRecord(
+        name=name,
+        branch=payload.branch.strip() or "Main Branch",
+        capacity=payload.capacity,
+        reserved=payload.reserved,
+        active=payload.active,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return to_bin_out(record, db)
+
+
+@app.put(f"{settings.api_prefix}/bins/{{bin_id}}", response_model=BinOut)
+def update_bin(
+    bin_id: int,
+    payload: BinUpdate,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> BinOut:
+    record = db.get(BinRecord, bin_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Bin not found")
+
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Bin name is required")
+        if name != record.name and db.scalar(select(BinRecord).where(BinRecord.name == name)):
+            raise HTTPException(status_code=409, detail=f"Bin {name} already exists")
+        record.name = name
+
+    if payload.branch is not None:
+        record.branch = payload.branch.strip() or "Main Branch"
+    if payload.capacity is not None:
+        record.capacity = payload.capacity
+    if payload.reserved is not None:
+        record.reserved = payload.reserved
+    if payload.active is not None:
+        record.active = payload.active
+
+    db.commit()
+    db.refresh(record)
+    return to_bin_out(record, db)
+
+
+@app.delete(f"{settings.api_prefix}/bins/{{bin_id}}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_bin(
+    bin_id: int,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> None:
+    record = db.get(BinRecord, bin_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Bin not found")
+    db.delete(record)
+    db.commit()
+
+
+@app.get(f"{settings.api_prefix}/bins/summary", response_model=list[BinSummary])
+def get_bins_summary(
     db: Session = Depends(get_db),
     _current_user: AccountRecord = Depends(get_current_user),
 ) -> list[BinSummary]:
     active_jobs = db.scalars(select(JobRecord).where(JobRecord.released.is_(False))).all()
-    bins: dict[str, list[JobRecord]] = {name: [] for name in ALL_BINS}
+    bin_names = [record.name for record in db.scalars(select(BinRecord).where(BinRecord.active.is_(True))).all()]
+    if not bin_names:
+        bin_names = ALL_BINS
 
+    bins: dict[str, list[JobRecord]] = {name: [] for name in bin_names}
     for job in active_jobs:
         if job.bin in bins:
             bins[job.bin].append(job)
 
     summaries: list[BinSummary] = []
-    for bin_name in ALL_BINS:
+    for bin_name in bin_names:
         jobs_in_bin = bins[bin_name]
         summaries.append(
             BinSummary(
@@ -609,3 +973,230 @@ def get_bins(
         )
 
     return summaries
+
+
+
+
+
+# Helper function to convert PricingRecord to PricingOut
+def to_pricing_out(pricing: PricingRecord) -> PricingOut:
+    return PricingOut(
+        id=pricing.id,
+        name=pricing.name,
+        description=pricing.description,
+        price=pricing.price,
+        category=pricing.category,
+        duration_days=pricing.duration_days,
+        is_active=pricing.is_active,
+        created_at=pricing.created_at,
+        updated_at=pricing.updated_at,
+    )
+
+
+# Pricing Endpoints
+
+# Fix the pricing endpoints - use string concatenation instead of f-strings for paths with parameters
+
+@app.get(settings.api_prefix + "/pricing", response_model=list[PricingOut])
+def list_pricing(
+    category: str | None = Query(default=None, description="Filter by category"),
+    is_active: bool | None = Query(default=None, description="Filter by active status"),
+    search: str | None = Query(default=None, description="Search in name and description"),
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> list[PricingOut]:
+    """List all pricing items with optional filters"""
+    query = select(PricingRecord)
+    
+    if category:
+        query = query.where(PricingRecord.category == category)
+    if is_active is not None:
+        query = query.where(PricingRecord.is_active == is_active)
+    if search:
+        search_term = f"%{search}%"
+        query = query.where(
+            (PricingRecord.name.ilike(search_term)) | 
+            (PricingRecord.description.ilike(search_term))
+        )
+    
+    pricing_items = db.scalars(query.order_by(PricingRecord.created_at.desc())).all()
+    return [to_pricing_out(item) for item in pricing_items]
+
+
+@app.get(settings.api_prefix + "/pricing/categories", response_model=list[str])
+def list_pricing_categories(
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> list[str]:
+    """Get all unique pricing categories"""
+    categories = db.scalars(
+        select(PricingRecord.category)
+        .distinct()
+        .where(PricingRecord.category.isnot(None))
+        .order_by(PricingRecord.category)
+    ).all()
+    return [cat for cat in categories if cat and cat.strip()]
+
+
+@app.post(settings.api_prefix + "/pricing", response_model=PricingOut, status_code=status.HTTP_201_CREATED)
+def create_pricing(
+    payload: PricingCreate,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> PricingOut:
+    """Create a new pricing item"""
+    # Check if pricing with same name exists
+    existing = db.scalar(
+        select(PricingRecord).where(PricingRecord.name == payload.name)
+    )
+    if existing:
+        raise HTTPException(
+            status_code=409, 
+            detail=f"Pricing item with name '{payload.name}' already exists"
+        )
+    
+    record = PricingRecord(
+        name=payload.name,
+        description=payload.description,
+        price=payload.price,
+        category=payload.category,
+        duration_days=payload.duration_days,
+        is_active=payload.is_active,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return to_pricing_out(record)
+
+
+@app.get(settings.api_prefix + "/pricing/{pricing_id}", response_model=PricingOut)
+def get_pricing(
+    pricing_id: int,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> PricingOut:
+    """Get a specific pricing item by ID"""
+    record = db.get(PricingRecord, pricing_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Pricing item not found")
+    return to_pricing_out(record)
+
+
+@app.put(settings.api_prefix + "/pricing/{pricing_id}", response_model=PricingOut)
+def update_pricing(
+    pricing_id: int,
+    payload: PricingUpdate,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> PricingOut:
+    """Update an existing pricing item"""
+    record = db.get(PricingRecord, pricing_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Pricing item not found")
+    
+    # Check for name conflicts if name is being updated
+    if payload.name is not None and payload.name != record.name:
+        existing = db.scalar(
+            select(PricingRecord).where(PricingRecord.name == payload.name)
+        )
+        if existing:
+            raise HTTPException(
+                status_code=409, 
+                detail=f"Pricing item with name '{payload.name}' already exists"
+            )
+        record.name = payload.name
+    
+    # Update fields if provided
+    if payload.description is not None:
+        record.description = payload.description
+    if payload.price is not None:
+        record.price = payload.price
+    if payload.category is not None:
+        record.category = payload.category
+    if payload.duration_days is not None:
+        record.duration_days = payload.duration_days
+    if payload.is_active is not None:
+        record.is_active = payload.is_active
+    
+    record.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(record)
+    return to_pricing_out(record)
+
+
+@app.patch(settings.api_prefix + "/pricing/{pricing_id}/toggle", response_model=PricingOut)
+def toggle_pricing_active(
+    pricing_id: int,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> PricingOut:
+    """Toggle the active status of a pricing item"""
+    record = db.get(PricingRecord, pricing_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Pricing item not found")
+    
+    record.is_active = not record.is_active
+    record.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(record)
+    return to_pricing_out(record)
+
+
+@app.delete(settings.api_prefix + "/pricing/{pricing_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_pricing(
+    pricing_id: int,
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> None:
+    """Delete a pricing item"""
+    record = db.get(PricingRecord, pricing_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Pricing item not found")
+    
+    db.delete(record)
+    db.commit()
+
+
+@app.post(settings.api_prefix + "/pricing/bulk", response_model=list[PricingOut], status_code=status.HTTP_201_CREATED)
+def bulk_create_pricing(
+    items: list[PricingCreate],
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> list[PricingOut]:
+    """Create multiple pricing items at once (useful for initial setup)"""
+    created_items = []
+    errors = []
+    
+    for idx, item in enumerate(items):
+        # Check if pricing with same name exists
+        existing = db.scalar(
+            select(PricingRecord).where(PricingRecord.name == item.name)
+        )
+        if existing:
+            errors.append(f"Item '{item.name}' already exists (index {idx})")
+            continue
+            
+        record = PricingRecord(
+            name=item.name,
+            description=item.description,
+            price=item.price,
+            category=item.category,
+            duration_days=item.duration_days,
+            is_active=item.is_active,
+        )
+        db.add(record)
+        created_items.append(record)
+    
+    if not created_items and errors:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"No items created: {', '.join(errors)}"
+        )
+    
+    db.commit()
+    
+    # Refresh all created items
+    for item in created_items:
+        db.refresh(item)
+    
+    return [to_pricing_out(item) for item in created_items]
