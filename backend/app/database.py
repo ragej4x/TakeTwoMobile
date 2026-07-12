@@ -1,4 +1,5 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import settings
@@ -8,9 +9,61 @@ class Base(DeclarativeBase):
     pass
 
 
-connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-engine = create_engine(settings.database_url, connect_args=connect_args)
+def create_engine_for_url(database_url: str):
+    connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+    return create_engine(database_url, connect_args=connect_args, pool_pre_ping=True)
+
+
+engine = create_engine_for_url(settings.database_url)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def initialize_database() -> None:
+    global engine, SessionLocal
+
+    database_url = settings.database_url
+    try:
+        with create_engine_for_url(database_url).connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except OperationalError as exc:
+        if database_url.startswith("sqlite"):
+            raise
+        fallback_url = "sqlite:///./taketwo.db"
+        print(f"Database connection failed for {database_url}: {exc}. Falling back to SQLite at {fallback_url}")
+        engine = create_engine_for_url(fallback_url)
+        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    else:
+        engine = create_engine_for_url(database_url)
+        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+    Base.metadata.create_all(bind=engine)
+
+    inspector = inspect(engine)
+    if not inspector.has_table("accounts"):
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("accounts")}
+    with engine.begin() as connection:
+        if "photo_url" not in existing_columns:
+            connection.execute(text("ALTER TABLE accounts ADD COLUMN photo_url VARCHAR"))
+
+        if "phone" not in existing_columns:
+            connection.execute(text("ALTER TABLE accounts ADD COLUMN phone VARCHAR(40) NOT NULL DEFAULT ''"))
+        if "role" not in existing_columns:
+            connection.execute(text("ALTER TABLE accounts ADD COLUMN role VARCHAR(100) NOT NULL DEFAULT 'Staff'"))
+        if "branch" not in existing_columns:
+            connection.execute(text("ALTER TABLE accounts ADD COLUMN branch VARCHAR(120) NOT NULL DEFAULT 'Main Branch'"))
+        if "is_test_account" not in existing_columns:
+            connection.execute(text("ALTER TABLE accounts ADD COLUMN is_test_account BOOLEAN NOT NULL DEFAULT FALSE"))
+
+        if not str(engine.url).startswith("sqlite"):
+            try:
+                connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_accounts_email ON accounts (email)"))
+            except Exception:
+                pass
+
+
+initialize_database()
 
 
 def get_db():

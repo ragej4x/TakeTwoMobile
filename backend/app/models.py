@@ -6,6 +6,23 @@ from sqlalchemy.orm import Mapped, mapped_column
 from .database import Base
 
 
+class BranchRecord(Base):
+    __tablename__ = "branches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), unique=True, index=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(40), unique=True, index=True, nullable=False, default="")
+    address: Mapped[str] = mapped_column(String(500), default="")
+    manager: Mapped[str] = mapped_column(String(200), default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
 class JobRecord(Base):
     __tablename__ = "jobs"
 
@@ -75,11 +92,29 @@ class AccountRecord(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    phone: Mapped[str] = mapped_column(String(40), default="")
-    role: Mapped[str] = mapped_column(String(100), default="Staff")
-    branch: Mapped[str] = mapped_column(String(120), default="Main Branch")
+    phone: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    role: Mapped[str] = mapped_column(String(100), nullable=False, default="Staff")
+    branch: Mapped[str] = mapped_column(String(120), nullable=False, default="Main Branch")
+    is_test_account: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     photo_url: Mapped[str | None] = mapped_column(String, nullable=True)
 
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+class BinRecord(Base):
+    __tablename__ = "bins"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(60), unique=True, index=True, nullable=False)
+    branch: Mapped[str] = mapped_column(String(120), nullable=False, default="Main Branch")
+    capacity: Mapped[int] = mapped_column(Integer, nullable=False, default=12)
+    reserved: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -126,3 +161,22 @@ class PasswordResetCodeRecord(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     used: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+
+class PricingRecord(Base):
+    __tablename__ = "pricing"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    price: Mapped[float] = mapped_column(Float, nullable=False)
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    duration_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
