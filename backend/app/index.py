@@ -14,6 +14,7 @@ from .database import Base, engine, get_db
 from .deps import get_current_user
 from .models import (
     AccountRecord,
+    AuditLogRecord,
     BinRecord,
     BranchRecord,
     DiscountRecord,
@@ -25,6 +26,7 @@ from .models import (
     PricingRecord
 )
 from .schemas import (
+    AuditLogOut,
     AuthResponse,
     BinCreate,
     BinOut,
@@ -281,6 +283,24 @@ def generate_job_id(db: Session) -> str:
     return f"{prefix}{sequence:03d}"
 
 
+def log_audit_action(
+    db: Session,
+    action: str,
+    entity_type: str,
+    entity_id: str | int,
+    user_name: str,
+    details: str,
+) -> None:
+    db.add(
+        AuditLogRecord(
+            action=action,
+            entity_type=entity_type,
+            entity_id=str(entity_id),
+            user_name=user_name or "System",
+            details=details,
+        )
+    )
+
 
 @app.get(f"{settings.api_prefix}/health")
 def health_check() -> dict:
@@ -289,10 +309,28 @@ def health_check() -> dict:
 
 @app.post(f"{settings.api_prefix}/auth/login", response_model=AuthResponse)
 def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)) -> AuthResponse:
-    account = db.scalar(select(AccountRecord).where(AccountRecord.email == payload.email.lower()))
+    email = payload.email.lower()
+    account = db.scalar(select(AccountRecord).where(AccountRecord.email == email))
     if account is None or not verify_password(payload.password, account.password_hash):
+        log_audit_action(
+            db,
+            "failed_login",
+            "Auth",
+            account.id if account else email,
+            account.name if account else email,
+            f"Failed login attempt for {email}",
+        )
+        db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
 
+    log_audit_action(
+        db,
+        "logged_in",
+        "Auth",
+        account.id,
+        account.name,
+        f"{account.name} logged in",
+    )
     session = create_session(db, account.id)
     set_session_cookie(response, session.token)
 
@@ -315,6 +353,15 @@ def logout(
     if token:
         session = db.scalar(select(SessionRecord).where(SessionRecord.token == token))
         if session is not None:
+            account = db.get(AccountRecord, session.user_id)
+            log_audit_action(
+                db,
+                "logged_out",
+                "Auth",
+                session.user_id,
+                account.name if account else "Unknown",
+                f"{account.name if account else 'Unknown user'} logged out",
+            )
             db.delete(session)
             db.commit()
     clear_session_cookie(response)
@@ -350,6 +397,14 @@ def request_password_reset(payload: PasswordResetRequest, db: Session = Depends(
                 expires_at=expires_at,
                 used=False,
             )
+        )
+        log_audit_action(
+            db,
+            "requested_password_reset",
+            "Auth",
+            account.id,
+            account.name,
+            f"Password reset requested for {email}",
         )
         db.commit()
         print(f"[TakeTwo Reset Code] email={email} code={code} expires_at={expires_at.isoformat()}Z")
@@ -404,6 +459,14 @@ def confirm_password_reset(payload: PasswordResetConfirmRequest, db: Session = D
     for code_entry in other_codes:
         code_entry.used = True
 
+    log_audit_action(
+        db,
+        "reset_password",
+        "Auth",
+        account.id,
+        account.name,
+        f"Password reset completed for {email}",
+    )
     db.commit()
     return PasswordResetConfirmResponse(message="Password reset successful")
 
@@ -427,6 +490,14 @@ def update_profile(
     current_user.role = payload.role
     current_user.branch = payload.branch
     current_user.photo_url = payload.photoUrl 
+    log_audit_action(
+        db,
+        "updated_profile",
+        "Profile",
+        current_user.id,
+        current_user.name,
+        "Updated profile information",
+    )
     db.commit()
     db.refresh(current_user)
     return to_profile(current_user)
@@ -461,6 +532,15 @@ def create_employee(
             branch=payload.branch,
         )
         db.add(record)
+        db.flush()
+        log_audit_action(
+            db,
+            "created_employee",
+            "Employee",
+            record.id,
+            payload.name,
+            f"Created employee account {payload.name}",
+        )
         db.commit()
         db.refresh(record)
     except IntegrityError as exc:
@@ -492,6 +572,14 @@ def update_employee(
     if payload.password:
         record.password_hash = hash_password(payload.password)
 
+    log_audit_action(
+        db,
+        "updated_employee",
+        "Employee",
+        record.id,
+        _current_user.name,
+        f"Updated employee {record.name}",
+    )
     db.commit()
     db.refresh(record)
     return to_employee_out(record, db)
@@ -514,6 +602,14 @@ def delete_employee(
     for session in sessions:
         db.delete(session)
 
+    log_audit_action(
+        db,
+        "deleted_employee",
+        "Employee",
+        record.id,
+        current_user.name,
+        f"Deleted employee {record.name}",
+    )
     db.delete(record)
     db.commit()
 
@@ -545,6 +641,15 @@ def create_branch(
 
     record = BranchRecord(name=name, code=code, address=payload.address or "", manager=payload.manager or "", active=payload.active)
     db.add(record)
+    db.flush()
+    log_audit_action(
+        db,
+        "created_branch",
+        "Branch",
+        record.id,
+        _current_user.name,
+        f"Created branch {record.name}",
+    )
     db.commit()
     db.refresh(record)
     return to_branch_out(record)
@@ -582,6 +687,14 @@ def update_branch(
     if payload.active is not None:
         record.active = payload.active
 
+    log_audit_action(
+        db,
+        "updated_branch",
+        "Branch",
+        record.id,
+        _current_user.name,
+        f"Updated branch {record.name}",
+    )
     db.commit()
     db.refresh(record)
     return to_branch_out(record)
@@ -596,6 +709,14 @@ def delete_branch(
     record = db.get(BranchRecord, branch_id)
     if not record:
         raise HTTPException(status_code=404, detail="Branch not found")
+    log_audit_action(
+        db,
+        "deleted_branch",
+        "Branch",
+        record.id,
+        _current_user.name,
+        f"Deleted branch {record.name}",
+    )
     db.delete(record)
     db.commit()
 
@@ -631,6 +752,14 @@ def update_settings(
     app_settings.theme = payload.theme
     app_settings.branch = payload.branch
     app_settings.selected_printer = payload.selectedPrinter
+    log_audit_action(
+        db,
+        "updated_settings",
+        "Settings",
+        app_settings.id,
+        _current_user.name,
+        "Updated application settings",
+    )
     db.commit()
     db.refresh(app_settings)
     return payload
@@ -680,6 +809,14 @@ def create_job(
     apply_job_update(record, payload)
     consume_discount_code(db, payload.discountCode)
     db.add(record)
+    log_audit_action(
+        db,
+        "created_job",
+        "Job",
+        record.id,
+        _current_user.name,
+        f"Created job {record.id}",
+    )
     db.commit()
     db.refresh(record)
     return to_job_out(record)
@@ -708,6 +845,14 @@ def update_job(
     if not record:
         raise HTTPException(status_code=404, detail="Job not found")
     apply_job_update(record, payload)
+    log_audit_action(
+        db,
+        "updated_job",
+        "Job",
+        record.id,
+        _current_user.name,
+        f"Updated job {record.id}",
+    )
     db.commit()
     db.refresh(record)
     return to_job_out(record)
@@ -724,6 +869,14 @@ def update_job_status(
     if not record:
         raise HTTPException(status_code=404, detail="Job not found")
     record.status = payload.status
+    log_audit_action(
+        db,
+        "updated_job_status",
+        "Job",
+        record.id,
+        _current_user.name,
+        f"Updated job status to {payload.status}",
+    )
     db.commit()
     db.refresh(record)
     return to_job_out(record)
@@ -740,6 +893,14 @@ def mark_job_released(
         raise HTTPException(status_code=404, detail="Job not found")
     record.released = True
     record.bin = ""
+    log_audit_action(
+        db,
+        "released_job",
+        "Job",
+        record.id,
+        _current_user.name,
+        f"Released job {record.id}",
+    )
     db.commit()
     db.refresh(record)
     return to_job_out(record)
@@ -754,6 +915,14 @@ def delete_job(
     record = db.get(JobRecord, job_id)
     if not record:
         raise HTTPException(status_code=404, detail="Job not found")
+    log_audit_action(
+        db,
+        "deleted_job",
+        "Job",
+        record.id,
+        _current_user.name,
+        f"Deleted job {record.id}",
+    )
     db.delete(record)
     db.commit()
 
@@ -810,6 +979,15 @@ def create_discount(
         expires_at=payload.expiresAt,
     )
     db.add(record)
+    db.flush()
+    log_audit_action(
+        db,
+        "created_discount",
+        "Discount",
+        record.id,
+        _current_user.name,
+        f"Created discount {record.code}",
+    )
     db.commit()
     db.refresh(record)
     return to_discount_out(record)
@@ -845,6 +1023,14 @@ def update_discount(
     if "active" in data:
         record.active = data["active"]
 
+    log_audit_action(
+        db,
+        "updated_discount",
+        "Discount",
+        record.id,
+        _current_user.name,
+        f"Updated discount {record.code}",
+    )
     db.commit()
     db.refresh(record)
     return to_discount_out(record)
@@ -859,8 +1045,36 @@ def delete_discount(
     record = db.get(DiscountRecord, discount_id)
     if not record:
         raise HTTPException(status_code=404, detail="Discount not found")
+    log_audit_action(
+        db,
+        "deleted_discount",
+        "Discount",
+        record.id,
+        _current_user.name,
+        f"Deleted discount {record.code}",
+    )
     db.delete(record)
     db.commit()
+
+
+@app.get(f"{settings.api_prefix}/audit-logs", response_model=list[AuditLogOut])
+def list_audit_logs(
+    db: Session = Depends(get_db),
+    _current_user: AccountRecord = Depends(get_current_user),
+) -> list[AuditLogOut]:
+    logs = db.scalars(select(AuditLogRecord).order_by(AuditLogRecord.created_at.desc())).all()
+    return [
+        AuditLogOut(
+            id=log.id,
+            action=log.action,
+            entityType=log.entity_type,
+            entityId=log.entity_id,
+            userName=log.user_name,
+            details=log.details,
+            createdAt=log.created_at,
+        )
+        for log in logs
+    ]
 
 
 @app.get(f"{settings.api_prefix}/bins", response_model=list[BinOut])
@@ -893,6 +1107,15 @@ def create_bin(
         active=payload.active,
     )
     db.add(record)
+    db.flush()
+    log_audit_action(
+        db,
+        "created_bin",
+        "Bin",
+        record.id,
+        _current_user.name,
+        f"Created bin {record.name}",
+    )
     db.commit()
     db.refresh(record)
     return to_bin_out(record, db)
@@ -926,6 +1149,14 @@ def update_bin(
     if payload.active is not None:
         record.active = payload.active
 
+    log_audit_action(
+        db,
+        "updated_bin",
+        "Bin",
+        record.id,
+        _current_user.name,
+        f"Updated bin {record.name}",
+    )
     db.commit()
     db.refresh(record)
     return to_bin_out(record, db)
@@ -940,6 +1171,14 @@ def delete_bin(
     record = db.get(BinRecord, bin_id)
     if not record:
         raise HTTPException(status_code=404, detail="Bin not found")
+    log_audit_action(
+        db,
+        "deleted_bin",
+        "Bin",
+        record.id,
+        _current_user.name,
+        f"Deleted bin {record.name}",
+    )
     db.delete(record)
     db.commit()
 
@@ -1064,6 +1303,15 @@ def create_pricing(
         is_active=payload.is_active,
     )
     db.add(record)
+    db.flush()
+    log_audit_action(
+        db,
+        "created_pricing",
+        "Pricing",
+        record.id,
+        _current_user.name,
+        f"Created pricing item {record.name}",
+    )
     db.commit()
     db.refresh(record)
     return to_pricing_out(record)
@@ -1119,6 +1367,14 @@ def update_pricing(
         record.is_active = payload.is_active
     
     record.updated_at = datetime.utcnow()
+    log_audit_action(
+        db,
+        "updated_pricing",
+        "Pricing",
+        record.id,
+        _current_user.name,
+        f"Updated pricing item {record.name}",
+    )
     db.commit()
     db.refresh(record)
     return to_pricing_out(record)
@@ -1137,6 +1393,14 @@ def toggle_pricing_active(
     
     record.is_active = not record.is_active
     record.updated_at = datetime.utcnow()
+    log_audit_action(
+        db,
+        "toggled_pricing",
+        "Pricing",
+        record.id,
+        _current_user.name,
+        f"Toggled pricing item {record.name}",
+    )
     db.commit()
     db.refresh(record)
     return to_pricing_out(record)
@@ -1153,6 +1417,14 @@ def delete_pricing(
     if not record:
         raise HTTPException(status_code=404, detail="Pricing item not found")
     
+    log_audit_action(
+        db,
+        "deleted_pricing",
+        "Pricing",
+        record.id,
+        _current_user.name,
+        f"Deleted pricing item {record.name}",
+    )
     db.delete(record)
     db.commit()
 
@@ -1192,7 +1464,18 @@ def bulk_create_pricing(
             status_code=400, 
             detail=f"No items created: {', '.join(errors)}"
         )
-    
+
+    db.flush()
+    for item in created_items:
+        log_audit_action(
+            db,
+            "created_pricing",
+            "Pricing",
+            item.id,
+            _current_user.name,
+            f"Created pricing item {item.name} (bulk)",
+        )
+
     db.commit()
     
     # Refresh all created items
