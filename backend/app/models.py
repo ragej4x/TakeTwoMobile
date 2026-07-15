@@ -163,6 +163,17 @@ class PasswordResetCodeRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class AuditLogRecord(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    action: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    entity_type: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    entity_id: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    user_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    details: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
 
 class PricingRecord(Base):
     __tablename__ = "pricing"

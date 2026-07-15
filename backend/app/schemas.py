@@ -218,6 +218,18 @@ class DiscountValidateResponse(BaseModel):
     message: str | None = None
 
 
+class AuditLogOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    action: str
+    entityType: str
+    entityId: str
+    userName: str
+    details: str
+    createdAt: datetime
+
+
 class BinBase(BaseModel):
     name: str
     branch: str = "Main Branch"

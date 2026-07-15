@@ -1,6 +1,7 @@
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from .config import settings
 
@@ -11,7 +12,15 @@ class Base(DeclarativeBase):
 
 def create_engine_for_url(database_url: str):
     connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
-    return create_engine(database_url, connect_args=connect_args, pool_pre_ping=True)
+    # NullPool: on Vercel each invocation is a fresh process, so an in-process
+    # pool (default 5 + 10 overflow) just means every cold start can open up
+    # to 15 connections that nothing reuses. Let Supabase's own pooler
+    # (transaction mode, port 6543) do the pooling instead.
+    poolclass = NullPool if not database_url.startswith("sqlite") else None
+    kwargs = {"connect_args": connect_args, "pool_pre_ping": True}
+    if poolclass is not None:
+        kwargs["poolclass"] = poolclass
+    return create_engine(database_url, **kwargs)
 
 
 engine = create_engine_for_url(settings.database_url)
@@ -22,10 +31,12 @@ def initialize_database() -> None:
     global engine, SessionLocal
 
     database_url = settings.database_url
+    probe_engine = create_engine_for_url(database_url)
     try:
-        with create_engine_for_url(database_url).connect() as connection:
+        with probe_engine.connect() as connection:
             connection.execute(text("SELECT 1"))
     except OperationalError as exc:
+        probe_engine.dispose()
         if database_url.startswith("sqlite"):
             raise
         fallback_url = "sqlite:///./taketwo.db"
@@ -33,8 +44,11 @@ def initialize_database() -> None:
         engine = create_engine_for_url(fallback_url)
         SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     else:
-        engine = create_engine_for_url(database_url)
+        # Reuse the probe engine instead of creating a third one.
+        engine = probe_engine
         SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+    from . import models  # noqa: F401  # Import models so Base.metadata can create all tables
 
     Base.metadata.create_all(bind=engine)
 
