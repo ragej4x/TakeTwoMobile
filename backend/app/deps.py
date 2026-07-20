@@ -44,3 +44,14 @@ def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session invalid")
 
     return user
+
+
+def get_optional_current_user(
+    authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
+    db: Session = Depends(get_db),
+) -> AccountRecord | None:
+    try:
+        return get_current_user(authorization=authorization, session_token=session_token, db=db)
+    except HTTPException:
+        return None
