@@ -14,7 +14,7 @@ class Settings:
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./taketwo.db")
     cors_origins_csv: str = os.getenv(
         "BACKEND_CORS_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174",
     )
 
     @property

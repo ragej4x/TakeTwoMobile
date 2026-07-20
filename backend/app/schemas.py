@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+from .models import RequestStatus
+
 
 Status = Literal[
     "Cleaning Stage",
@@ -23,10 +25,10 @@ class AdditionalService(BaseModel):
 
 class ShoeItem(BaseModel):
     itemId: str
-    size: str = ""
-    brand: str = ""
-    model: str = ""
-    color: str = ""
+    size: str | None = None
+    brand: str | None = None
+    model: str | None = None
+    color: str | None = None
     services: list[str] = Field(default_factory=list)
     additionalServices: list[AdditionalService] = Field(default_factory=list)
     sponsored: bool = False
@@ -324,3 +326,106 @@ class PricingOut(PricingBase):
     id: int
     created_at: datetime
     updated_at: datetime
+
+
+class QRCodeCheckResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    code: str
+    is_valid: bool
+    is_used: bool
+
+
+class QRCodeGenerateRequest(BaseModel):
+    branch_id: int | None = None
+    count: int = Field(default=1, ge=1, le=200)
+
+
+class QRCodeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    code: str
+    is_used: bool
+    branch_id: int | None
+    created_at: datetime
+
+
+class CustomerIn(BaseModel):
+    full_name: str = Field(min_length=1, max_length=255)
+    phone_number: str = Field(min_length=5, max_length=20)
+    email: EmailStr | None = None
+
+
+class CustomerOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    full_name: str
+    phone_number: str
+    email: str | None
+
+
+class CustomerAccountOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    full_name: str
+    phone_number: str
+    email: str | None
+    photo_url: str | None = None
+    branch: str | None = None
+    address: str | None = None
+
+
+class DropoffRequestCreate(BaseModel):
+    code: str = Field(..., description="Sticker code, e.g. 'AG16001' (scanned or manually typed)")
+    customer: CustomerIn
+    shoe_brand: str | None = None
+    shoe_model: str | None = None
+    shoe_color: str | None = None
+    service_type: str | None = None
+    special_instructions: str | None = None
+    photo_urls: list[str] = Field(default_factory=list)
+    price_list: str | None = None
+    discounts: str | None = None
+    number_of_pairs: int | None = None
+    bin: str | None = None
+    sponsored: bool = False
+
+
+class DropoffRequestOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    status: RequestStatus
+    qr_code: QRCodeOut
+    customer: CustomerOut
+    shoe_brand: str | None
+    shoe_model: str | None
+    shoe_color: str | None
+    service_type: str | None
+    special_instructions: str | None
+    photo_urls: list[str]
+    rejection_reason: str | None
+    submitted_at: datetime
+    reviewed_at: datetime | None
+    completed_at: datetime | None
+    price_list: str | None = None
+    discounts: str | None = None
+    number_of_pairs: int | None = None
+    bin: str | None = None
+    sponsored: bool = False
+    job_id: str | None = None
+
+
+class DropoffRequestReview(BaseModel):
+    approve: bool
+    rejection_reason: str | None = None
+    reviewed_by_staff_id: int | None = None
+
+
+class DropoffStatusUpdate(BaseModel):
+    status: RequestStatus
+    note: str | None = None
+    changed_by_staff_id: int | None = None
