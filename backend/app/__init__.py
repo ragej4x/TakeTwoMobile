@@ -1,1 +1,0 @@
-"""TakeTwo FastAPI backend package."""
